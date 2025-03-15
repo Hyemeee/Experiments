@@ -1,0 +1,190 @@
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+from tqdm import tqdm
+import json
+import networkx as nx
+from sentence_transformers import SentenceTransformer, util
+
+#input example
+'''
+"Michelle Bachelet" -> "person.governmental_position" -> "[ENT1]" -> "governmental_position.appointed_by_location" -> 
+"[ENT2]" -> "location.official_language" -> "[ENT3]"
+'''
+
+class Retriever():
+    
+    def __init__(self, device, top_k, pretrained_model):
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+        self.bert = AutoModel.from_pretrained(pretrained_model)
+        self.sentence = SentenceTransformer('all-MiniLM-L6-v2')
+        self.bert.to(device)
+        self.sentence.to(device)
+        self.device = device
+        self.top_k = top_k
+    
+    def get_ent_embedding(self, entities, batch_size):
+        embeddings = []
+        with torch.no_grad():
+            for i in tqdm(range(0, len(entities), batch_size)):
+                batch_data = entities[i:i+batch_size]
+                encoded_inputs = self.tokenizer(text=batch_data,
+                                add_special_tokens=True,
+                                max_length= 512,
+                                return_token_type_ids=True,
+                                truncation=True,
+                                padding=True,
+                                return_tensors='pt')
+                encoded_inputs = {key: tensor.to(self.device) for key, tensor in encoded_inputs.items()}
+                outputs = self.bert(**encoded_inputs)
+                e_emb = outputs.last_hidden_state[:, 0, :]
+                normed_e_emb = nn.functional.normalize(e_emb, dim=1)
+                embeddings.append(normed_e_emb)
+                torch.cuda.empty_cache()
+        return torch.cat(embeddings, dim=0)
+
+    def entity_linking(self, entities, ent_embeddings, batch_data):
+        
+        encoded = self.tokenizer(text=batch_data, 
+                        add_special_tokens=True, max_length = 512,
+                        return_token_type_ids=True, truncation=True, 
+                        padding=True, return_tensors='pt')
+        
+        encoded = {key: tensor.to(self.device) for key, tensor in encoded.items()}
+        outputs = self.bert(**encoded)
+        t_emb = outputs.last_hidden_state[:,0,:]
+        probs = util.cos_sim(t_emb, ent_embeddings)
+        #normed_t_emb = nn.functional.normalize(t_emb, dim=1)
+        #probs = normed_t_emb.mm(ent_embeddings.t())
+        top_k_indices = probs.topk(k=self.top_k).indices  
+        #top_k_entities = []
+        top_k_ent = entities[top_k_indices] 
+        #top_k_entities.append(top_ent)
+        
+        return top_k_ent
+    
+    def relation_linking(self, relation_list, batch_data):
+        batch_emb = self.sentence.encode(batch_data, convert_to_tensor=True)
+        relation_emb = self.sentence.encode(relation_list, convert_to_tensor=True)
+
+        probs = util.cos_sim(batch_emb, relation_emb)
+        top_k_indices = probs.topk(k=self.top_k).indices    
+        top_k_rels = [relation_list[idx] for idx in top_k_indices]
+
+        return top_k_rels
+    
+def split_path(batch_data):
+    '''
+    batch_path = []
+    for d in batch_data:
+        # Strip any extra whitespace and split by '->'
+        split_d = d.strip().split('->')
+        # Remove any extra whitespace around each part
+        #cleaned_split_d = [part.strip() for part in split_d]
+        batch_path.append(split_d)
+    '''
+    split_d = batch_data.strip().split('->')
+    return split_d
+        
+def padding_path(batch_path, pad_token='[PAD]'):
+    max_len = max(len(p) for p in batch_path)
+    padded_batch = [p + [pad_token] * (max_len - len(p)) for p in batch_path]
+    return padded_batch
+
+def relation_graph(triples): 
+    rel_graph = {}
+    for t in triples:
+        if t[0] in rel_graph:
+            rel_graph[t[0]].add(t[1])
+        else:
+            rel_graph[t[0]] = set()
+            rel_graph[t[0]].add(t[1])
+        if t[2] in rel_graph:
+            rel_graph[t[2]].add(t[1])
+        else:
+            rel_graph[t[2]] = set()
+            rel_graph[t[2]].add(t[1])
+    return rel_graph
+
+def build_graph(triples):
+    G = nx.Graph()
+    for triple in triples:
+        h, r, t = triple        
+        G.add_edge(h, t, relation=r.strip())
+    return G
+
+def get_tail(G, h, relation):
+    tails = []
+    for neighbor in G.neighbors(h):
+        edge_data = G.get_edge_data(h, neighbor)
+        if edge_data and edge_data.get('relation') == relation:
+            tails.append(neighbor)
+    return tails
+     
+def main():
+    #setting
+    pretrained_model =  'bert-base-uncased'
+    device = 'cuda:0'
+    top_k = 1
+    batch_size = 512
+    #Set your own total_graph path 
+    total_graph_path = '/home/hyemin/model/my_model/data/total_graph_cwq.json'
+    
+    #Set your own reasoning path file generated by llm
+    #the file should be form like: {id:"ENT -> REL -> ENT -> ...}"
+    #data_path = '/home/hyemin/model/my_model/output/CWQ_toy_Llama_COT.json'
+    
+    
+    triples = json.load(open(total_graph_path, 'r', encoding='utf-8')) 
+    entities = sorted(set(t[0] for t in triples).union(set(t[2] for t in triples)))
+    #data = json.load(open(data_path, 'r', encoding='utf-8'))
+    data = '''
+    "Lou Seal" -> "mascot.team" -> "[ENT1]" -> "team.last_world_series_win" -> "[ENT2]"
+    '''
+   
+    #batch_data = ['Lou Seal', 'mascot.team', '[ENT1]', 'team.last_world_series_win', '[ENT2]']
+    batch_data = ['Douglas Haig, 1st Earl Haig', 'participated in', '[ENT #1]', 'is', '[ENT #2]', 'associated with', 'France', 'same as', '[ENT #3]', 'same as', '[ENT #1]']
+    rel_graph = relation_graph(triples)
+    G = build_graph(triples)
+    retriever = Retriever(device, top_k, pretrained_model)
+    ent_embeddings = retriever.get_ent_embedding(entities, batch_size)
+
+    #for i in tqdm(range(0, len(data), batch_size)):
+    #batch = data[i:i+batch_size]
+    
+    #batch_data = data.strip().split('->')
+    reasoning_path = []
+    for i in range(len(batch_data)):
+        if i == 0:
+            top_k_ent = retriever.entity_linking(entities, ent_embeddings, batch_data[i].strip())
+            reasoning_path.append(top_k_ent)
+        elif i == 1:
+            one_hop_rel = rel_graph[top_k_ent]
+            top_k_rel = retriever.relation_linking(list(one_hop_rel), batch_data[i])
+            current_rel = []
+            current_tail = []
+            for r in top_k_rel:
+                t = get_tail(G, reasoning_path[0], r)
+                current_rel.append(r)
+                current_tail.append(t)
+            reasoning_path.append(current_rel)
+            reasoning_path.append(current_tail)
+        elif i%2 == 1:
+            one_hop_rel = rel_graph[top_k_ent]
+            top_k_rel = retriever.relation_linking(list(one_hop_rel), batch_data[i])
+            current_rel = []
+            current_tail = []
+            for h_list in reasoning_path[i-1]:
+                for h in h_list:
+                    for r in top_k_rel:
+                        t = get_tail(G, h, r)
+                        current_rel.append(r)
+                        current_tail.append(t)
+            reasoning_path.append(current_rel)
+            reasoning_path.append(current_tail)        
+        else:
+            pass
+    print(reasoning_path)   
+            
+if __name__ == '__main__':
+    main()
