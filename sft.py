@@ -12,34 +12,6 @@ import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
-N_CPUS = 1
-
-SUBQ_ZERO_SHOT_PROMPT = """You are an expert of world knowledge with strong logical skills.
-Given the provided candidate reasoning paths, answer the given question based on the tail entity of the reasoning paths.
-The answer must be the tail entity of a candidate reasoning path.
-If there is no suitable entity, return ‘None’.
-
-Question: 
-{question}
-Candidate reasoning paths: 
-{entities}"""
-
-SUBQ_ANS_TEMPLATE = """
-Return : {answer}"""
-
-TOTALQ_ZERO_SHOT_PROMPT = """You are an expert of world knowledge with strong logical skills.
-When a question and candidate reasoning paths are given, determine whether the provided reasoning paths are sufficient to answer the question.
-If the candidate reasoning paths are enough to answer the question, return “yes”. If they are not sufficient, return “no”.
-You must return either “yes” or “no”, and nothing else.
-
-Question: 
-{question}
-Candidate reasoning paths: 
-{entities}"""
-
-TOTALQ_ANS_TEMPLATE = """
-Return : {answer}"""
-
 def load_dataset(x):
     paths = ["/home/minbae/KGQA/webqsp_sft_train_path_subQ.jsonl", "/home/minbae/KGQA/sft_train_totalq1000.jsonl"]
     data_list = []
