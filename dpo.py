@@ -14,44 +14,6 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, Pe
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig, AutoTokenizer, HfArgumentParser, set_seed
 
 
-SUBQ_ZERO_SHOT_PROMPT = """You are an expert of world knowledge with strong logical skills.
-Given the provided candidate reasoning paths, answer the given question based on the tail entity of the reasoning paths.
-The answer must be the tail entity of a candidate reasoning path.
-If there is no suitable entity, return ‘None’.
-
-Question: 
-{question}
-Candidate reasoning paths: 
-{paths}"""
-
-SUBQ_ANS_TEMPLATE = """
-Return : {answer}"""
-
-TOTALQ_ZERO_SHOT_PROMPT = """You are an expert of world knowledge with strong logical skills.
-When a question and candidate reasoning paths are given, determine whether the provided reasoning paths are sufficient to answer the question.
-If the candidate reasoning paths are enough to answer the question, return “yes”. If they are not sufficient, return “no”.
-You must return either “yes” or “no”, and nothing else.
-
-Question: 
-{question}
-Candidate reasoning paths: 
-{paths}"""
-
-TOTALQ_ANS_TEMPLATE = """
-Return : {answer}"""
-
-EPRUNING_ZERO_SHOT_PROMPT = """You are an expert of world knowledge with strong logical skills.
-When a question and candidate answer entity list are given, determine which answer entities can be used to answer the question.
-You must return answer from the candidate entity list. If there are no suitable entities, return "None".
-Please provide the minimum possible number of entities.
-
-Question: 
-{question}
-Candidate answer entity: 
-{entities}"""
-
-TOTALQ_ANS_TEMPLATE = """
-Return : {answer}"""
 
 def load_dataset(paths):
     data_list = []
